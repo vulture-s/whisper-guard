@@ -29,6 +29,7 @@ class GuardResult:
 class WhisperGuard:
     def __init__(self, config: Optional[GuardConfig] = None):
         self.config = config or GuardConfig()
+        self._loop_pattern = self._compile_char_loop_pattern()
 
     def process(self, segments: List[Dict]) -> GuardResult:
         if not segments:
@@ -50,20 +51,7 @@ class WhisperGuard:
                 filtered_count=0,
             )
 
-        good_segments = []
-        for segment in segments:
-            text = segment.get("text", "").strip()
-            if not text:
-                continue
-            if segment.get("no_speech_prob", 0) > self.config.no_speech_prob:
-                continue
-            if segment.get("avg_logprob", 0) < self.config.avg_logprob:
-                continue
-            if segment.get("compression_ratio", 1) > self.config.compression_ratio:
-                continue
-            cleaned = dict(segment)
-            cleaned["text"] = text
-            good_segments.append(cleaned)
+        good_segments = self._filter_segments(segments)
 
         if not good_segments:
             return GuardResult(
@@ -114,15 +102,30 @@ class WhisperGuard:
         return (unique / len(chunks)) < self.config.repetition_threshold
 
     def has_char_loops(self, text: str) -> bool:
-        pattern = self._char_loop_pattern()
-        return bool(pattern.search(text))
+        return bool(self._loop_pattern.search(text))
 
     def remove_char_loops(self, text: str) -> tuple:
-        pattern = self._char_loop_pattern()
-        cleaned, count = pattern.subn(r"\1", text)
+        cleaned, count = self._loop_pattern.subn(r"\1", text)
         return cleaned, count
 
-    def _char_loop_pattern(self):
+    def _filter_segments(self, segments: List[Dict]) -> List[Dict]:
+        good = []
+        for segment in segments:
+            text = segment.get("text", "").strip()
+            if not text:
+                continue
+            if segment.get("no_speech_prob", 0) > self.config.no_speech_prob:
+                continue
+            if segment.get("avg_logprob", 0) < self.config.avg_logprob:
+                continue
+            if segment.get("compression_ratio", 1) > self.config.compression_ratio:
+                continue
+            cleaned = dict(segment)
+            cleaned["text"] = text
+            good.append(cleaned)
+        return good
+
+    def _compile_char_loop_pattern(self):
         min_pattern = self.config.char_loop_min_pattern
         max_pattern = self.config.char_loop_max_pattern
         min_repeats = self.config.char_loop_min_repeats
@@ -136,19 +139,8 @@ def filter_hallucinations(segments: List[Dict], config: Optional[GuardConfig] = 
         return []
 
     filtered = []
-    for segment in segments:
-        text = segment.get("text", "").strip()
-        if not text:
-            continue
-        if segment.get("no_speech_prob", 0) > guard.config.no_speech_prob:
-            continue
-        if segment.get("avg_logprob", 0) < guard.config.avg_logprob:
-            continue
-        if segment.get("compression_ratio", 1) > guard.config.compression_ratio:
-            continue
-        cleaned = dict(segment)
-        cleaned_text, _ = guard.remove_char_loops(text)
-        cleaned["text"] = cleaned_text.strip()
-        if cleaned["text"]:
-            filtered.append(cleaned)
+    for seg in guard._filter_segments(segments):
+        seg["text"] = guard._loop_pattern.sub(r"\1", seg["text"]).strip()
+        if seg["text"]:
+            filtered.append(seg)
     return filtered

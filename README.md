@@ -92,7 +92,7 @@ from whisper_guard.vocab import build_hotwords_prompt, filter_filler_words
 
 ## Part Of
 
-Built for the `arkiv` transcription pipeline and split out as a standalone package for reuse.
+Built for the [`arkiv`](https://github.com/vulture-s/arkiv) transcription pipeline and split out as a standalone package for reuse.
 
 ## License
 
