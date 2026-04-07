@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "whisper-guard"
+version = "0.1.0"
+description = "4-layer anti-hallucination filter for Whisper speech-to-text output"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "Hevin Yeh", email = "vulture.s.tw@gmail.com" }]
+keywords = ["whisper", "speech-to-text", "hallucination", "filter", "asr"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+[project.urls]
+Homepage = "https://github.com/vulture-s/whisper-guard"
+Repository = "https://github.com/vulture-s/whisper-guard"
