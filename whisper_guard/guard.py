@@ -8,6 +8,8 @@ class GuardConfig:
     silence_threshold: float = 0.6
     no_speech_prob: float = 0.8
     avg_logprob: float = -1.5
+    avg_logprob_short: float = -1.7
+    short_segment_threshold: float = 1.6
     compression_ratio: float = 3.0
     repetition_window: int = 6
     repetition_threshold: float = 0.35
@@ -116,7 +118,14 @@ class WhisperGuard:
                 continue
             if segment.get("no_speech_prob", 0) > self.config.no_speech_prob:
                 continue
-            if segment.get("avg_logprob", 0) < self.config.avg_logprob:
+            duration = None
+            if "start" in segment and "end" in segment:
+                duration = segment["end"] - segment["start"]
+            if duration is not None and duration < self.config.short_segment_threshold:
+                logprob_thresh = self.config.avg_logprob_short
+            else:
+                logprob_thresh = self.config.avg_logprob
+            if segment.get("avg_logprob", 0) < logprob_thresh:
                 continue
             if segment.get("compression_ratio", 1) > self.config.compression_ratio:
                 continue

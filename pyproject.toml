@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "whisper-guard"
-version = "0.2.0"
+version = "0.3.0"
 description = "4-layer anti-hallucination filter for Whisper speech-to-text output"
 readme = "README.md"
 license = "MIT"

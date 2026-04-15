@@ -1,13 +1,19 @@
 from whisper_guard import GuardConfig, WhisperGuard, filter_hallucinations
 
 
-def make_segment(text, no_speech_prob=0.1, avg_logprob=-0.5, compression_ratio=1.5):
-    return {
+def make_segment(text, no_speech_prob=0.1, avg_logprob=-0.5, compression_ratio=1.5,
+                  start=None, end=None):
+    seg = {
         "text": text,
         "no_speech_prob": no_speech_prob,
         "avg_logprob": avg_logprob,
         "compression_ratio": compression_ratio,
     }
+    if start is not None:
+        seg["start"] = start
+    if end is not None:
+        seg["end"] = end
+    return seg
 
 
 def test_normal_segments_pass():
@@ -105,6 +111,56 @@ def test_custom_config():
     )
     assert result.passed is True
     assert result.filtered_count == 2
+
+
+def test_short_segment_stricter_logprob():
+    """Short segments (<1.6s) use avg_logprob_short=-1.7 instead of -1.5."""
+    guard = WhisperGuard()
+    # logprob -1.6: passes normal threshold (-1.5) but fails short threshold (-1.7)
+    result = guard.process([
+        make_segment("good segment", start=0.0, end=5.0),
+        make_segment("short hallucination", avg_logprob=-1.6, start=10.0, end=11.0),
+    ])
+    assert result.passed is True
+    assert result.filtered_count == 2  # both kept — short one at -1.6 > -1.7
+
+
+def test_short_segment_rejected_by_stricter_logprob():
+    """Short segment with very low logprob gets rejected by stricter threshold."""
+    guard = WhisperGuard()
+    result = guard.process([
+        make_segment("good segment", start=0.0, end=5.0),
+        make_segment("bad short", avg_logprob=-1.8, start=10.0, end=11.0),
+    ])
+    assert result.passed is True
+    assert result.text == "good segment"
+    assert result.filtered_count == 1
+
+
+def test_long_segment_uses_normal_logprob():
+    """Long segments use the normal -1.5 threshold, not the stricter one."""
+    guard = WhisperGuard()
+    result = guard.process([
+        make_segment("good segment", start=0.0, end=5.0),
+        make_segment("borderline long", avg_logprob=-1.6, start=10.0, end=15.0),
+    ])
+    assert result.passed is True
+    # -1.6 < -1.5 → filtered out by normal threshold
+    assert result.text == "good segment"
+    assert result.filtered_count == 1
+
+
+def test_no_timing_uses_normal_logprob():
+    """Segments without start/end fall back to normal threshold."""
+    guard = WhisperGuard()
+    result = guard.process([
+        make_segment("good segment"),
+        make_segment("no timing", avg_logprob=-1.6),
+    ])
+    assert result.passed is True
+    # No timing info → uses normal -1.5 threshold → -1.6 < -1.5 → filtered
+    assert result.text == "good segment"
+    assert result.filtered_count == 1
 
 
 def test_filter_hallucinations_convenience():

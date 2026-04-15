@@ -17,7 +17,7 @@ This package extracts the anti-hallucination logic from `arkiv` into a reusable 
 | Layer | What it does | Default |
 |------|------|------|
 | L1 Silence | Reject all-silence batches | avg `no_speech_prob` > `0.6` |
-| L2 Segment | Filter weak segments | `no_speech_prob` > `0.8`, `avg_logprob` < `-1.5`, `compression_ratio` > `3.0` |
+| L2 Segment | Filter weak segments | `no_speech_prob` > `0.8`, `avg_logprob` < `-1.5` (short <1.6s: `-1.7`), `compression_ratio` > `3.0` |
 | L3 Repetition | Reject repetitive text blocks | unique chunk ratio < `0.35` |
 | L4 Char loops | Remove looped patterns | 2-4 chars repeated 3+ times |
 
@@ -75,8 +75,12 @@ from whisper_guard import WhisperGuard, GuardConfig, filter_hallucinations
     "no_speech_prob": 0.12,
     "avg_logprob": -0.44,
     "compression_ratio": 1.2,
+    "start": 0.0,   # optional — enables dynamic logprob threshold
+    "end": 2.5,      # optional — enables dynamic logprob threshold
 }
 ```
+
+When `start`/`end` are provided, segments shorter than `1.6s` use a stricter logprob threshold (`-1.7`) to catch hallucinations in brief audio gaps. Segments without timing info fall back to the normal threshold.
 
 ## Compatible With
 
