@@ -112,7 +112,7 @@ from whisper_guard import WhisperGuard, GuardConfig, filter_hallucinations
 }
 ```
 
-When `start`/`end` are provided, segments shorter than `1.6s` use a stricter logprob threshold (`-1.7`) to catch hallucinations in brief audio gaps. Segments without timing info fall back to the normal threshold.
+When `start`/`end` are provided, segments shorter than `1.6s` use a *more lenient* logprob threshold (`-1.7` vs `-1.5`) — genuine brief utterances naturally score lower confidence, so loosening the bar avoids wrongly dropping real short speech. Segments without timing info fall back to the normal threshold.
 
 ## Compatible With
 

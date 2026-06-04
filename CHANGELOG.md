@@ -3,8 +3,8 @@
 ## 0.3.0 — 2026-04-15
 
 ### Added
-- Dynamic logprob threshold: short segments (<1.6s) use stricter `-1.7` threshold to catch hallucinations that tend to appear in brief audio gaps
-- `GuardConfig.avg_logprob_short` — configurable stricter threshold for short segments (default: `-1.7`)
+- Dynamic logprob threshold: short segments (<1.6s) use a separate, *more lenient* `-1.7` threshold (vs `-1.5`) — genuine brief utterances naturally score lower confidence, so loosening the bar avoids wrongly dropping real short speech
+- `GuardConfig.avg_logprob_short` — configurable threshold for short segments (default: `-1.7`)
 - `GuardConfig.short_segment_threshold` — duration cutoff in seconds (default: `1.6`)
 - 4 new test cases covering dynamic logprob behavior
 
