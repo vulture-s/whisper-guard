@@ -1,5 +1,7 @@
 # whisper-guard
 
+> English ｜ [繁體中文](README.zh-TW.md)
+
 `whisper-guard` is a small Python package that removes common Whisper hallucinations before you ship subtitles or transcripts downstream.
 
 ## Problem
@@ -32,6 +34,36 @@ These numbers are from the `arkiv` guard benchmark set on April 2026.
 | LLM polish only | 16 | 0% | 106.1s |
 | Guard + LLM | 2 | -87.5% | 119.1s |
 | VAD + Guard + LLM | 1 | -93.8% | 128.4s |
+
+## Accuracy Benchmark
+
+> ⚠️ This is a **curated fixture benchmark**, not an independent third-party one.
+> The labels reflect what we already expect the guard to catch, so its value is
+> **transparency + regression guard** (numbers move if a change starts eating real
+> speech or letting hallucinations through), not a leaderboard score. Reproduce
+> with `python bench/benchmark.py`; invariants are pinned in `tests/test_bench.py`.
+
+On a hand-labelled corpus modelling real Chinese Whisper output (genuine speech mixed with each hallucination type):
+
+| Metric | Result | Meaning |
+|------|------|------|
+| **Precision** | **100%** | Everything flagged really is a hallucination |
+| **False-positive rate** | **0%** | **Never eats real speech** — the property that matters most |
+| **Recall** | **80%** | Catches most hallucinations, but misses *fluent phantoms* (see below) |
+| **Batch rejection accuracy** | **100%** | L1 silence / L3 repetition batch verdicts all correct |
+
+## Limitations
+
+whisper-guard is **metric/pattern-driven** — it reasons over `no_speech_prob`,
+`avg_logprob`, `compression_ratio`, and character-loop patterns. It therefore
+**cannot catch a *fluent phantom***: a single, grammatical hallucinated sentence
+with healthy metrics (e.g. `請按讚訂閱開啟小鈴鐺` emitted over silence) is
+indistinguishable from real speech by metrics alone.
+
+→ Those are caught by **upstream VAD** (voice-activity detection). By design,
+whisper-guard pairs with VAD: VAD removes silence-phantoms, whisper-guard removes
+repetition / low-confidence / loop hallucinations. The 80% recall above honestly
+reflects that division of labour.
 
 ## Install
 
