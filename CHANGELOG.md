@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.1 — 2026-08-08
+
+Packaging only — no behaviour change. Three defects that all shipped in 0.3.0.
+
+### Fixed
+- **The package reported a different version than it was published as.** The
+  0.3.0 wheel on PyPI carries `Version: 0.3.0` in its metadata and
+  `__version__ = "0.2.0"` inside — so `pip show whisper-guard` and
+  `whisper_guard.__version__` have disagreed for two months. The number lived
+  in two places (`pyproject.toml` and `__init__.py`), the repo copy was
+  corrected on 2026-06-04, and the wheel had been built the day before. Nothing
+  compared them.
+- **The version now has one source.** hatchling reads it from
+  `whisper_guard/__init__.py` (`[tool.hatch.version]`); the literal in
+  `pyproject.toml` is gone, so the two cannot diverge by construction.
+  `tests/test_version.py` is the belt — it compares installed metadata against
+  `__version__`, which also catches a wheel built from a stale tree.
+- **The sdist shipped a local virtualenv.** `whisper_guard-0.3.0.tar.gz` is
+  1.5 MB, and 520 of its files are a `.venv-test/` directory — `pyvenv.cfg`
+  with local absolute paths and all. `.gitignore` only listed `.venv/`, and
+  hatchling does not consult `.gitignore` for sdists regardless. Both build
+  targets now carry explicit excludes; the sdist is **15 KB**.
+
 ## 0.3.0 — 2026-04-15
 
 ### Added

@@ -2,9 +2,30 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Version has ONE source: whisper_guard/__init__.py, read from there by
+# hatchling. Keeping a second copy here is what shipped 0.3.0 to PyPI with
+# __version__ = "0.2.0" baked into the wheel — the metadata said one thing
+# and the package said another, and nothing checked.
+[tool.hatch.version]
+path = "whisper_guard/__init__.py"
+
+# The published 0.3.0 sdist is 1.5 MB and 520 of its files are a local
+# `.venv-test/` virtualenv, pyvenv.cfg and all: `.gitignore` only listed
+# `.venv/`, and hatchling does not consult .gitignore for sdists anyway. Both
+# targets are given an explicit exclude list so no local environment can ride
+# along again.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".venv", ".venv/**", ".venv-*", ".venv-*/**",
+    "dist", "build", ".pytest_cache", "**/__pycache__",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["whisper_guard"]
+
 [project]
 name = "whisper-guard"
-version = "0.3.0"
+dynamic = ["version"]
 description = "4-layer anti-hallucination filter for Whisper speech-to-text output"
 readme = "README.md"
 license = "MIT"
