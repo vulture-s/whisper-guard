@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.2 — unreleased
+
+Behaviour fixes from the 2026-10-09 audit. Both change transcript output.
+
+### Fixed
+- **L4 char-loop filter rewrote numbers.** `(.{2,4})\1{2,}` ran over all
+  text, so `100000000` became `100`, `0912121212` became `0912` and
+  `1.000.000.000` became `1.000`. A loop whose unit is purely numeric
+  (digits plus `. , : / + - $ %`, no whitespace) is now kept unless the
+  repeated run is at least `char_loop_numeric_min_span` (default 20)
+  characters long; a thousands group (`,000` / `.000`) is always kept;
+  text loops (`xyzxyzxyz`, `哈哈哈哈哈哈`), loops that mix a digit with text
+  (`第1集第1集第1集`) and runaway digit runs (`0000…` x32) are still collapsed.
+  `filter_hallucinations()` now goes through the same rule.
+- **L1 silence check averaged by segment count.** Three 1 s BGM tails could
+  outvote 30 s of clear speech and reject the whole batch as silence
+  (`filter_hallucinations()` → `[]`). The gate now uses the *smaller* of the
+  plain mean and the duration-weighted mean (when every segment has a positive
+  `start`/`end`), so it fires only when the batch is silent by both measures.
+  Duration alone would have wiped 40 s of interview followed by 80 s of
+  ambience; the min never rejects a batch the old gate passed. Without timing
+  (or with non-numeric / non-finite `start`/`end`) it is the plain mean.
+
 ## 0.3.1 — 2026-08-08
 
 Packaging only — no behaviour change. Three defects that all shipped in 0.3.0.

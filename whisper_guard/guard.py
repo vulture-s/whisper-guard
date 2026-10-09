@@ -1,3 +1,4 @@
+import math
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -16,6 +17,10 @@ class GuardConfig:
     char_loop_min_pattern: int = 2
     char_loop_max_pattern: int = 4
     char_loop_min_repeats: int = 3
+    # A loop whose unit is purely numeric ("00", "12", ".000") is data unless
+    # the repeated run is at least this long: amounts, phone numbers, IPs and
+    # versions stay intact, while a decoder spewing "0000…" still collapses.
+    char_loop_numeric_min_span: int = 20
 
 
 @dataclass
@@ -26,6 +31,14 @@ class GuardResult:
     original_count: int = 0
     filtered_count: int = 0
     char_loops_removed: int = 0
+
+
+# Numeric "data" units: digits and in-number punctuation, NO whitespace —
+# "0 0 0 0 0 0" is a decoder loop, not a value (Codex audit of #1).
+_NUMERIC_UNIT = re.compile(r"^[\d.,:/+\-$%]+$")
+# A thousands group (",000" / ".000") is always data, however many repeat:
+# "$1,000,000,000,000,000" must not become "$1,000".
+_THOUSANDS_GROUP = re.compile(r"^[.,]\d{3}$")
 
 
 class WhisperGuard:
@@ -43,8 +56,7 @@ class WhisperGuard:
                 filtered_count=0,
             )
 
-        avg_no_speech = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
-        if avg_no_speech > self.config.silence_threshold:
+        if self._mean_no_speech(segments) > self.config.silence_threshold:
             return GuardResult(
                 text="",
                 passed=False,
@@ -83,6 +95,50 @@ class WhisperGuard:
             char_loops_removed=removed,
         )
 
+    @staticmethod
+    def _mean_no_speech(segments: List[Dict]) -> float:
+        """Batch-level no_speech score for the silence gate (L1).
+
+        The gate drops the WHOLE batch, so it must only fire when the batch is
+        silent by both measures:
+
+        * by segment count alone, three 1 s BGM tails outvoted 30 s of clear
+          speech and wiped the transcript;
+        * by duration alone, 40 s of interview followed by 80 s of ambience
+          (three long hallucinated segments) wiped the interview — speech the
+          count-based gate kept (dual-track audit of #1).
+
+        So: min(count mean, duration-weighted mean). It never rejects a batch
+        the old count gate passed; long silent segments are still dropped one
+        by one by the per-segment no_speech filter. Without usable timing
+        (any segment lacking a positive start/end) it is the plain mean.
+        """
+        durations = []
+        for segment in segments:
+            if "start" not in segment or "end" not in segment:
+                durations = None
+                break
+            start, end = segment["start"], segment["end"]
+            # Only real numbers: a numeric *string* used to be float()-ed here,
+            # pass L1, then crash in _filter_segments ("30" - "0"), where the
+            # plain mean had rejected the batch before ever getting there.
+            if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                       and math.isfinite(v) for v in (start, end)):
+                durations = None
+                break
+            duration = float(end) - float(start)
+            if duration <= 0:
+                durations = None
+                break
+            durations.append(duration)
+
+        probs = [s.get("no_speech_prob", 0) for s in segments]
+        plain = sum(probs) / len(probs)
+        if durations:
+            total = sum(durations)
+            return min(plain, sum(p * d for p, d in zip(probs, durations)) / total)
+        return plain
+
     def is_repetitive(self, text: str) -> bool:
         window = self.config.repetition_window
         if len(text) < window * 3:
@@ -104,11 +160,38 @@ class WhisperGuard:
         return (unique / len(chunks)) < self.config.repetition_threshold
 
     def has_char_loops(self, text: str) -> bool:
-        return bool(self._loop_pattern.search(text))
+        return any(not self._is_numeric_data(m) for m in self._loop_pattern.finditer(text))
 
     def remove_char_loops(self, text: str) -> tuple:
-        cleaned, count = self._loop_pattern.subn(r"\1", text)
+        count = 0
+
+        def _collapse(match):
+            nonlocal count
+            if self._is_numeric_data(match):
+                return match.group(0)
+            count += 1
+            return match.group(1)
+
+        cleaned = self._loop_pattern.sub(_collapse, text)
         return cleaned, count
+
+    def _is_numeric_data(self, match) -> bool:
+        """True when a matched loop is a number, not a decoder loop.
+
+        Only a unit made of digits and numeric punctuation counts as data
+        ("00" in 100000000, "12" in 0912121212, ".000" in 1.000.000.000).
+        A unit that mixes a digit with text ("第1集", "ha1") is still a loop,
+        and a purely numeric run of ``char_loop_numeric_min_span`` chars or
+        more ("0000…" x32) is a decoder loop, not a value anyone said.
+        """
+        unit = match.group(1)
+        if not any(ch.isdecimal() for ch in unit):
+            return False
+        if not _NUMERIC_UNIT.match(unit):
+            return False
+        if _THOUSANDS_GROUP.match(unit):
+            return True
+        return len(match.group(0)) < self.config.char_loop_numeric_min_span
 
     def _filter_segments(self, segments: List[Dict]) -> List[Dict]:
         good = []
@@ -138,6 +221,10 @@ class WhisperGuard:
         min_pattern = self.config.char_loop_min_pattern
         max_pattern = self.config.char_loop_max_pattern
         min_repeats = self.config.char_loop_min_repeats
+        # Numeric runs ("00" x4 inside 100000000) are exempted in
+        # _is_numeric_data, not here: excluding every digit from the unit also
+        # let digit-bearing hallucinations ("第1集第1集第1集", "0000…" x32)
+        # through untouched.
         return re.compile(r"(.{%d,%d})\1{%d,}" % (min_pattern, max_pattern, min_repeats - 1))
 
 
@@ -149,7 +236,7 @@ def filter_hallucinations(segments: List[Dict], config: Optional[GuardConfig] = 
 
     filtered = []
     for seg in guard._filter_segments(segments):
-        seg["text"] = guard._loop_pattern.sub(r"\1", seg["text"]).strip()
+        seg["text"] = guard.remove_char_loops(seg["text"])[0].strip()
         if seg["text"]:
             filtered.append(seg)
     return filtered
