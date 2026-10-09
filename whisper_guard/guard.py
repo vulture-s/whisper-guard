@@ -1,3 +1,4 @@
+import math
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -32,7 +33,12 @@ class GuardResult:
     char_loops_removed: int = 0
 
 
-_NUMERIC_UNIT = re.compile(r"^[\d\s.,:/+\-$%]+$")
+# Numeric "data" units: digits and in-number punctuation, NO whitespace —
+# "0 0 0 0 0 0" is a decoder loop, not a value (Codex audit of #1).
+_NUMERIC_UNIT = re.compile(r"^[\d.,:/+\-$%]+$")
+# A thousands group (",000" / ".000") is always data, however many repeat:
+# "$1,000,000,000,000,000" must not become "$1,000".
+_THOUSANDS_GROUP = re.compile(r"^[.,]\d{3}$")
 
 
 class WhisperGuard:
@@ -112,11 +118,15 @@ class WhisperGuard:
             if "start" not in segment or "end" not in segment:
                 durations = None
                 break
-            try:
-                duration = float(segment["end"]) - float(segment["start"])
-            except (TypeError, ValueError):
+            start, end = segment["start"], segment["end"]
+            # Only real numbers: a numeric *string* used to be float()-ed here,
+            # pass L1, then crash in _filter_segments ("30" - "0"), where the
+            # plain mean had rejected the batch before ever getting there.
+            if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                       and math.isfinite(v) for v in (start, end)):
                 durations = None
                 break
+            duration = float(end) - float(start)
             if duration <= 0:
                 durations = None
                 break
@@ -175,10 +185,12 @@ class WhisperGuard:
         more ("0000…" x32) is a decoder loop, not a value anyone said.
         """
         unit = match.group(1)
-        if not any(ch.isdigit() for ch in unit):
+        if not any(ch.isdecimal() for ch in unit):
             return False
         if not _NUMERIC_UNIT.match(unit):
             return False
+        if _THOUSANDS_GROUP.match(unit):
+            return True
         return len(match.group(0)) < self.config.char_loop_numeric_min_span
 
     def _filter_segments(self, segments: List[Dict]) -> List[Dict]:

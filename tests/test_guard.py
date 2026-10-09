@@ -299,3 +299,24 @@ def test_text_loops_unchanged_by_numeric_exemption():
     for text, expected in [("哈哈哈哈哈哈哈哈", "哈哈"), ("謝謝謝謝謝謝", "謝謝"),
                            ("the the the the the", "the the"), ("ok ok ok ok ok", "ok ok")]:
         assert guard.remove_char_loops(text)[0] == expected
+
+
+# --- Codex audit of #1 ---
+
+
+def test_long_thousands_grouping_is_data():
+    for text in ["金額 $1,000,000,000,000,000 元", "1.000.000.000.000.000.000"]:
+        assert WhisperGuard().remove_char_loops(text) == (text, 0)
+
+
+def test_space_separated_digit_loop_still_collapses():
+    cleaned, removed = WhisperGuard().remove_char_loops("前言 0 0 0 0 0 0 結語")
+    assert removed == 1 and cleaned == "前言 0 0 結語"
+
+
+def test_string_timestamps_do_not_crash_and_fall_back_to_plain_mean():
+    segs = [make_segment("hallucinated", no_speech_prob=0.05, start="0", end="30")]
+    segs += [make_segment("noise", no_speech_prob=0.95, start=30.0 + i, end=31.0 + i) for i in range(3)]
+    result = WhisperGuard().process(segs)
+    assert result.rejected_by == "silence"
+    assert filter_hallucinations(segs) == []
