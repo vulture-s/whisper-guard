@@ -138,7 +138,13 @@ class WhisperGuard:
         min_pattern = self.config.char_loop_min_pattern
         max_pattern = self.config.char_loop_max_pattern
         min_repeats = self.config.char_loop_min_repeats
-        return re.compile(r"(.{%d,%d})\1{%d,}" % (min_pattern, max_pattern, min_repeats - 1))
+        # The repeated unit must not contain a digit: "00" x4 inside
+        # 100000000, "12" x4 in a phone number, ".000" in 1.000.000.000 are
+        # data, not a decoder loop. Collapsing them silently rewrote amounts,
+        # phone numbers, years and version strings.
+        return re.compile(
+            r"((?:(?!\d).){%d,%d})\1{%d,}" % (min_pattern, max_pattern, min_repeats - 1)
+        )
 
 
 def filter_hallucinations(segments: List[Dict], config: Optional[GuardConfig] = None) -> List[Dict]:

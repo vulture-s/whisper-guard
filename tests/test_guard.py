@@ -172,3 +172,51 @@ def test_filter_hallucinations_convenience():
     )
     assert len(filtered) == 1
     assert filtered[0]["text"] == "keep this"
+
+
+# --- Numeric content must survive the char-loop layer (audit 2026-10-09) ---
+# A repeated 2-4 char unit is a Whisper loop when it is text ("xyzxyzxyz"),
+# but it is *data* when it carries digits: amounts, phone numbers, years,
+# version strings. Collapsing "00" x4 in 100000000 silently rewrote the value.
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "價格是 100000000 元",
+        "2000000",
+        "電話 0912121212",
+        "1.000.000.000",
+        "版本 1.1.1.1",
+        "IP 10.10.10.10",
+        "金額 $1,000,000,000",
+        "2020202020 年",
+    ],
+)
+def test_char_loops_do_not_rewrite_numbers(text):
+    guard = WhisperGuard()
+    cleaned, removed = guard.remove_char_loops(text)
+    assert cleaned == text
+    assert removed == 0
+    assert guard.has_char_loops(text) is False
+
+
+def test_numbers_survive_process_and_filter_hallucinations():
+    guard = WhisperGuard()
+    result = guard.process([make_segment("價格是 100000000 元")])
+    assert result.text == "價格是 100000000 元"
+    assert result.char_loops_removed == 0
+    out = filter_hallucinations([make_segment("電話 0912121212")])
+    assert [s["text"] for s in out] == ["電話 0912121212"]
+
+
+def test_text_loops_still_removed_next_to_numbers():
+    guard = WhisperGuard()
+    cleaned, removed = guard.remove_char_loops("xyzxyzxyz 100000000")
+    assert cleaned == "xyz 100000000"
+    assert removed == 1
+    cleaned, _ = guard.remove_char_loops("哈哈哈哈哈哈")
+    assert cleaned == "哈哈"
+
