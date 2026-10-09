@@ -43,8 +43,7 @@ class WhisperGuard:
                 filtered_count=0,
             )
 
-        avg_no_speech = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
-        if avg_no_speech > self.config.silence_threshold:
+        if self._mean_no_speech(segments) > self.config.silence_threshold:
             return GuardResult(
                 text="",
                 passed=False,
@@ -82,6 +81,36 @@ class WhisperGuard:
             filtered_count=len(good_segments),
             char_loops_removed=removed,
         )
+
+    @staticmethod
+    def _mean_no_speech(segments: List[Dict]) -> float:
+        """Duration-weighted mean of no_speech_prob over the batch.
+
+        Weighting by segment *count* let three 1 s BGM tails outvote 30 s of
+        clear speech and wipe the whole transcript. When every segment has a
+        positive duration (start/end), weight by it; otherwise fall back to the
+        plain mean, which is the only thing the data supports.
+        """
+        durations = []
+        for segment in segments:
+            if "start" not in segment or "end" not in segment:
+                durations = None
+                break
+            try:
+                duration = float(segment["end"]) - float(segment["start"])
+            except (TypeError, ValueError):
+                durations = None
+                break
+            if duration <= 0:
+                durations = None
+                break
+            durations.append(duration)
+
+        probs = [s.get("no_speech_prob", 0) for s in segments]
+        if durations:
+            total = sum(durations)
+            return sum(p * d for p, d in zip(probs, durations)) / total
+        return sum(probs) / len(probs)
 
     def is_repetitive(self, text: str) -> bool:
         window = self.config.repetition_window

@@ -220,3 +220,41 @@ def test_text_loops_still_removed_next_to_numbers():
     cleaned, _ = guard.remove_char_loops("哈哈哈哈哈哈")
     assert cleaned == "哈哈"
 
+
+# --- Silence layer must weight by duration, not by segment count ---
+
+
+def test_silence_check_is_duration_weighted():
+    # 30 s of clear speech + three 1 s BGM tails. Count-average no_speech is
+    # (0.05 + 3*0.95)/4 = 0.725 > 0.6 and used to wipe the whole transcript;
+    # duration-weighted it is (30*0.05 + 3*0.95)/33 = 0.13.
+    segs = [make_segment("這是一段很長的正常講話內容", no_speech_prob=0.05, start=0.0, end=30.0)]
+    for i in range(3):
+        segs.append(make_segment("bgm", no_speech_prob=0.95, start=30.0 + i, end=31.0 + i))
+    result = WhisperGuard().process(segs)
+    assert result.passed is True
+    assert result.rejected_by is None
+    assert "這是一段很長的正常講話內容" in result.text
+    assert filter_hallucinations(segs) != []
+
+
+def test_silence_still_rejects_when_mostly_silent_by_duration():
+    # Inverse: one short clean segment + a long silent one -> mostly silence.
+    segs = [
+        make_segment("hi", no_speech_prob=0.05, start=0.0, end=1.0),
+        make_segment("noise", no_speech_prob=0.9, start=1.0, end=31.0),
+    ]
+    result = WhisperGuard().process(segs)
+    assert result.passed is False
+    assert result.rejected_by == "silence"
+
+
+def test_silence_without_timing_falls_back_to_plain_mean():
+    segs = [
+        make_segment("a", no_speech_prob=0.05),
+        make_segment("b", no_speech_prob=0.95),
+        make_segment("c", no_speech_prob=0.95),
+        make_segment("d", no_speech_prob=0.95),
+    ]
+    result = WhisperGuard().process(segs)
+    assert result.rejected_by == "silence"
