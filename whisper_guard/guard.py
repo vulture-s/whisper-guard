@@ -14,6 +14,10 @@ class GuardConfig:
     compression_ratio: float = 3.0
     repetition_window: int = 6
     repetition_threshold: float = 0.35
+    # L3 word-ratio is measured per window of this many words and averaged.
+    # A whole-text type/token ratio falls with length for any natural text, so
+    # without a window every long genuine transcript eventually reads as a loop.
+    repetition_word_window: int = 100
     char_loop_min_pattern: int = 2
     char_loop_max_pattern: int = 4
     char_loop_min_repeats: int = 3
@@ -149,8 +153,7 @@ class WhisperGuard:
 
         words = [word for word in text.split() if word]
         if len(words) >= 3:
-            word_ratio = len(set(words)) / len(words)
-            if word_ratio < self.config.repetition_threshold:
+            if self._word_ratio(words) < self.config.repetition_threshold:
                 return True
 
         chunks = [text[i:i + window] for i in range(0, len(text) - window, window)]
@@ -158,6 +161,24 @@ class WhisperGuard:
             return False
         unique = len(set(chunks))
         return (unique / len(chunks)) < self.config.repetition_threshold
+
+    def _word_ratio(self, words: List[str]) -> float:
+        """Unique-word ratio, averaged over fixed windows for long texts.
+
+        Up to one window this is the plain ratio (unchanged behaviour). Beyond
+        it, each full window is scored on its own and the scores are averaged;
+        the trailing partial window is folded into the last full one. A loop
+        drives its windows to ~0 wherever it sits, while real speech keeps
+        every window high no matter how long the recording is.
+        """
+        window = max(int(self.config.repetition_word_window), 3)
+        if len(words) <= window:
+            return len(set(words)) / len(words)
+        chunks = [words[i:i + window] for i in range(0, len(words), window)]
+        if len(chunks) > 1 and len(chunks[-1]) < window:
+            tail = chunks.pop()
+            chunks[-1] = chunks[-1] + tail
+        return sum(len(set(c)) / len(c) for c in chunks) / len(chunks)
 
     def has_char_loops(self, text: str) -> bool:
         return any(not self._is_numeric_data(m) for m in self._loop_pattern.finditer(text))
