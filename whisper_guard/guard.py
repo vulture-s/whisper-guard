@@ -91,12 +91,21 @@ class WhisperGuard:
 
     @staticmethod
     def _mean_no_speech(segments: List[Dict]) -> float:
-        """Duration-weighted mean of no_speech_prob over the batch.
+        """Batch-level no_speech score for the silence gate (L1).
 
-        Weighting by segment *count* let three 1 s BGM tails outvote 30 s of
-        clear speech and wipe the whole transcript. When every segment has a
-        positive duration (start/end), weight by it; otherwise fall back to the
-        plain mean, which is the only thing the data supports.
+        The gate drops the WHOLE batch, so it must only fire when the batch is
+        silent by both measures:
+
+        * by segment count alone, three 1 s BGM tails outvoted 30 s of clear
+          speech and wiped the transcript;
+        * by duration alone, 40 s of interview followed by 80 s of ambience
+          (three long hallucinated segments) wiped the interview — speech the
+          count-based gate kept (dual-track audit of #1).
+
+        So: min(count mean, duration-weighted mean). It never rejects a batch
+        the old count gate passed; long silent segments are still dropped one
+        by one by the per-segment no_speech filter. Without usable timing
+        (any segment lacking a positive start/end) it is the plain mean.
         """
         durations = []
         for segment in segments:
@@ -114,10 +123,11 @@ class WhisperGuard:
             durations.append(duration)
 
         probs = [s.get("no_speech_prob", 0) for s in segments]
+        plain = sum(probs) / len(probs)
         if durations:
             total = sum(durations)
-            return sum(p * d for p, d in zip(probs, durations)) / total
-        return sum(probs) / len(probs)
+            return min(plain, sum(p * d for p, d in zip(probs, durations)) / total)
+        return plain
 
     def is_repetitive(self, text: str) -> bool:
         window = self.config.repetition_window

@@ -238,15 +238,29 @@ def test_silence_check_is_duration_weighted():
     assert filter_hallucinations(segs) != []
 
 
-def test_silence_still_rejects_when_mostly_silent_by_duration():
-    # Inverse: one short clean segment + a long silent one -> mostly silence.
-    segs = [
-        make_segment("hi", no_speech_prob=0.05, start=0.0, end=1.0),
-        make_segment("noise", no_speech_prob=0.9, start=1.0, end=31.0),
-    ]
+def test_silence_still_rejects_when_silent_by_count_and_duration():
+    # One short clean segment + three long silent ones: silent either way.
+    segs = [make_segment("hi", no_speech_prob=0.05, start=0.0, end=1.0)]
+    for i in range(3):
+        segs.append(make_segment("noise", no_speech_prob=0.9, start=1.0 + 10 * i, end=11.0 + 10 * i))
     result = WhisperGuard().process(segs)
     assert result.passed is False
     assert result.rejected_by == "silence"
+
+
+def test_long_ambient_tail_does_not_wipe_interview():
+    # 40 s of interview (8 x 5 s) then 80 s of ambience that Whisper fills with
+    # three long hallucinated segments. Duration-weighted alone = 0.62 > 0.6 and
+    # rejected the whole batch; the count gate (0.28) kept the interview.
+    segs = [make_segment("第%d句正常回答" % i, no_speech_prob=0.05, start=5.0 * i, end=5.0 * i + 5)
+            for i in range(8)]
+    segs += [make_segment("Thank you for watching.", no_speech_prob=0.9, start=40.0, end=67.0),
+             make_segment("Thank you.", no_speech_prob=0.9, start=67.0, end=94.0),
+             make_segment("Bye.", no_speech_prob=0.9, start=94.0, end=120.0)]
+    result = WhisperGuard().process(segs)
+    assert result.passed is True
+    assert "第0句正常回答" in result.text and "第7句正常回答" in result.text
+    assert "Thank you" not in result.text  # still dropped per segment
 
 
 def test_silence_without_timing_falls_back_to_plain_mean():

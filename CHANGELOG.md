@@ -15,9 +15,12 @@ Behaviour fixes from the 2026-10-09 audit. Both change transcript output.
   `filter_hallucinations()` now goes through the same rule.
 - **L1 silence check averaged by segment count.** Three 1 s BGM tails could
   outvote 30 s of clear speech and reject the whole batch as silence
-  (`filter_hallucinations()` → `[]`). The mean is now weighted by segment
-  duration when every segment has a positive `start`/`end`; without timing it
-  falls back to the plain mean.
+  (`filter_hallucinations()` → `[]`). The gate now uses the *smaller* of the
+  plain mean and the duration-weighted mean (when every segment has a positive
+  `start`/`end`), so it fires only when the batch is silent by both measures.
+  Duration alone would have wiped 40 s of interview followed by 80 s of
+  ambience; the min never rejects a batch the old gate passed. Without timing
+  it is the plain mean.
 
 ## 0.3.1 — 2026-08-08
 
