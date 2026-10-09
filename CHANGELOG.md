@@ -7,8 +7,12 @@ Behaviour fixes from the 2026-10-09 audit. Both change transcript output.
 ### Fixed
 - **L4 char-loop filter rewrote numbers.** `(.{2,4})\1{2,}` ran over all
   text, so `100000000` became `100`, `0912121212` became `0912` and
-  `1.000.000.000` became `1.000`. The repeated unit may no longer contain a
-  digit; text loops (`xyzxyzxyz`, `哈哈哈哈哈哈`) are still collapsed.
+  `1.000.000.000` became `1.000`. A loop whose unit is purely numeric
+  (digits plus `. , : / + - $ %` and spaces) is now kept unless the repeated
+  run is at least `char_loop_numeric_min_span` (default 20) characters long;
+  text loops (`xyzxyzxyz`, `哈哈哈哈哈哈`), loops that mix a digit with text
+  (`第1集第1集第1集`) and runaway digit runs (`0000…` x32) are still collapsed.
+  `filter_hallucinations()` now goes through the same rule.
 - **L1 silence check averaged by segment count.** Three 1 s BGM tails could
   outvote 30 s of clear speech and reject the whole batch as silence
   (`filter_hallucinations()` → `[]`). The mean is now weighted by segment

@@ -16,6 +16,10 @@ class GuardConfig:
     char_loop_min_pattern: int = 2
     char_loop_max_pattern: int = 4
     char_loop_min_repeats: int = 3
+    # A loop whose unit is purely numeric ("00", "12", ".000") is data unless
+    # the repeated run is at least this long: amounts, phone numbers, IPs and
+    # versions stay intact, while a decoder spewing "0000…" still collapses.
+    char_loop_numeric_min_span: int = 20
 
 
 @dataclass
@@ -26,6 +30,9 @@ class GuardResult:
     original_count: int = 0
     filtered_count: int = 0
     char_loops_removed: int = 0
+
+
+_NUMERIC_UNIT = re.compile(r"^[\d\s.,:/+\-$%]+$")
 
 
 class WhisperGuard:
@@ -133,11 +140,36 @@ class WhisperGuard:
         return (unique / len(chunks)) < self.config.repetition_threshold
 
     def has_char_loops(self, text: str) -> bool:
-        return bool(self._loop_pattern.search(text))
+        return any(not self._is_numeric_data(m) for m in self._loop_pattern.finditer(text))
 
     def remove_char_loops(self, text: str) -> tuple:
-        cleaned, count = self._loop_pattern.subn(r"\1", text)
+        count = 0
+
+        def _collapse(match):
+            nonlocal count
+            if self._is_numeric_data(match):
+                return match.group(0)
+            count += 1
+            return match.group(1)
+
+        cleaned = self._loop_pattern.sub(_collapse, text)
         return cleaned, count
+
+    def _is_numeric_data(self, match) -> bool:
+        """True when a matched loop is a number, not a decoder loop.
+
+        Only a unit made of digits and numeric punctuation counts as data
+        ("00" in 100000000, "12" in 0912121212, ".000" in 1.000.000.000).
+        A unit that mixes a digit with text ("第1集", "ha1") is still a loop,
+        and a purely numeric run of ``char_loop_numeric_min_span`` chars or
+        more ("0000…" x32) is a decoder loop, not a value anyone said.
+        """
+        unit = match.group(1)
+        if not any(ch.isdigit() for ch in unit):
+            return False
+        if not _NUMERIC_UNIT.match(unit):
+            return False
+        return len(match.group(0)) < self.config.char_loop_numeric_min_span
 
     def _filter_segments(self, segments: List[Dict]) -> List[Dict]:
         good = []
@@ -167,13 +199,11 @@ class WhisperGuard:
         min_pattern = self.config.char_loop_min_pattern
         max_pattern = self.config.char_loop_max_pattern
         min_repeats = self.config.char_loop_min_repeats
-        # The repeated unit must not contain a digit: "00" x4 inside
-        # 100000000, "12" x4 in a phone number, ".000" in 1.000.000.000 are
-        # data, not a decoder loop. Collapsing them silently rewrote amounts,
-        # phone numbers, years and version strings.
-        return re.compile(
-            r"((?:(?!\d).){%d,%d})\1{%d,}" % (min_pattern, max_pattern, min_repeats - 1)
-        )
+        # Numeric runs ("00" x4 inside 100000000) are exempted in
+        # _is_numeric_data, not here: excluding every digit from the unit also
+        # let digit-bearing hallucinations ("第1集第1集第1集", "0000…" x32)
+        # through untouched.
+        return re.compile(r"(.{%d,%d})\1{%d,}" % (min_pattern, max_pattern, min_repeats - 1))
 
 
 def filter_hallucinations(segments: List[Dict], config: Optional[GuardConfig] = None) -> List[Dict]:
@@ -184,7 +214,7 @@ def filter_hallucinations(segments: List[Dict], config: Optional[GuardConfig] = 
 
     filtered = []
     for seg in guard._filter_segments(segments):
-        seg["text"] = guard._loop_pattern.sub(r"\1", seg["text"]).strip()
+        seg["text"] = guard.remove_char_loops(seg["text"])[0].strip()
         if seg["text"]:
             filtered.append(seg)
     return filtered

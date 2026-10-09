@@ -258,3 +258,30 @@ def test_silence_without_timing_falls_back_to_plain_mean():
     ]
     result = WhisperGuard().process(segs)
     assert result.rejected_by == "silence"
+
+
+# --- Digit-bearing hallucinations must not escape the char-loop layer ---
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("第1集第1集第1集第1集", "第1集"),
+        ("ha1ha1ha1ha1ha1", "ha1"),
+        ("0" * 32, "0000"),
+        ("1.1.1.1.1.1.1.1.1.1.1.1", "1.1."),
+    ],
+)
+def test_digit_bearing_loops_still_collapse(text, expected):
+    guard = WhisperGuard()
+    cleaned, removed = guard.remove_char_loops(text)
+    assert removed >= 1
+    assert guard.has_char_loops(text) is True
+    assert cleaned.startswith(expected) and len(cleaned) < len(text)
+
+
+def test_text_loops_unchanged_by_numeric_exemption():
+    guard = WhisperGuard()
+    for text, expected in [("哈哈哈哈哈哈哈哈", "哈哈"), ("謝謝謝謝謝謝", "謝謝"),
+                           ("the the the the the", "the the"), ("ok ok ok ok ok", "ok ok")]:
+        assert guard.remove_char_loops(text)[0] == expected
