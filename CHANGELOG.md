@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.2 — unreleased
+## 0.3.2 — 2026-10-20
 
 Behaviour fixes from the 2026-10-09 audit and 2026-10-19 probe. All change transcript output.
 
