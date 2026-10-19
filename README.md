@@ -19,7 +19,7 @@ This package extracts the anti-hallucination logic from `arkiv` into a reusable 
 | Layer | What it does | Default |
 |------|------|------|
 | L1 Silence | Reject all-silence batches | avg `no_speech_prob` > `0.6` |
-| L2 Segment | Filter weak segments | `no_speech_prob` > `0.8`, `avg_logprob` < `-1.5` (short <1.6s: `-1.7`), `compression_ratio` > `3.0` |
+| L2 Segment | Filter weak segments | `no_speech_prob` > `0.8` (unless a ≥5 s window is dense ≥2 chars/s and `avg_logprob` > `-0.5`), `avg_logprob` < `-1.5` (short <1.6s: `-1.7`), `compression_ratio` > `3.0` |
 | L3 Repetition | Reject repetitive text blocks | unique chunk ratio < `0.35` |
 | L4 Char loops | Remove looped patterns | 2-4 chars repeated 3+ times |
 

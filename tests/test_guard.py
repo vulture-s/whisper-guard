@@ -320,3 +320,77 @@ def test_string_timestamps_do_not_crash_and_fall_back_to_plain_mean():
     result = WhisperGuard().process(segs)
     assert result.rejected_by == "silence"
     assert filter_hallucinations(segs) == []
+
+
+# --- L2: no_speech alone must not drop dense, confident speech ---
+# Metrics below are real faster-whisper large-v3 output (2026-10-19 probe):
+# OkCSnbiszNs 0-30 s / 60-90 s, and synthetic pink-noise / silence tails.
+# Text is generated non-repeating so L3 doesn't interfere.
+
+
+def _speech(n, offset=0):
+    return "".join(chr(0x4E00 + offset + i) for i in range(n))
+
+
+def test_dense_confident_speech_survives_high_no_speech():
+    segs = [make_segment(_speech(215), no_speech_prob=0.96, avg_logprob=-0.05, compression_ratio=1.44,
+                         start=0.0, end=30.0),
+            make_segment(_speech(200, 300), no_speech_prob=0.09, avg_logprob=-0.03, start=30.0, end=60.0),
+            make_segment(_speech(212, 600), no_speech_prob=1.00, avg_logprob=-0.02, compression_ratio=1.47,
+                         start=60.0, end=90.0)]
+    assert len(WhisperGuard()._filter_segments(segs)) == 3
+    assert len(filter_hallucinations(segs)) == 3
+
+
+def test_silence_hallucinations_with_high_no_speech_still_dropped():
+    segs = [make_segment(_speech(30), no_speech_prob=0.05, start=0.0, end=5.0),
+            make_segment("Thank you.", no_speech_prob=0.87, avg_logprob=-0.17, start=5.0, end=35.0),
+            make_segment("由 Amara.org 社群提供的字幕", no_speech_prob=0.81, avg_logprob=-0.24,
+                         start=35.0, end=65.0),
+            make_segment("Thank you for watching.", no_speech_prob=0.9, start=65.0, end=92.0)]
+    kept = [s["text"] for s in WhisperGuard()._filter_segments(segs)]
+    assert kept == [_speech(30)]
+
+
+def test_high_no_speech_dense_but_unsure_still_dropped():
+    seg = make_segment(_speech(30), no_speech_prob=0.9, avg_logprob=-0.9, start=0.0, end=5.0)
+    assert WhisperGuard()._filter_segments([seg]) == []
+
+
+def test_high_no_speech_without_timing_keeps_old_behaviour():
+    seg = make_segment(_speech(200), no_speech_prob=0.96, avg_logprob=-0.05)
+    assert WhisperGuard()._filter_segments([seg]) == []
+
+
+def test_high_no_speech_string_timing_keeps_old_behaviour():
+    seg = make_segment(_speech(200), no_speech_prob=0.96, avg_logprob=-0.05, start="0", end="30")
+    assert WhisperGuard()._filter_segments([seg]) == []
+
+
+def test_short_reel_over_bgm_not_wiped_by_silence_gate():
+    # 60 s reel, two 30 s windows of real speech, both no_speech ~1.0.
+    segs = [make_segment(_speech(210), no_speech_prob=0.96, avg_logprob=-0.05, start=0.0, end=30.0),
+            make_segment(_speech(205, 400), no_speech_prob=1.00, avg_logprob=-0.02, start=30.0, end=60.0)]
+    result = WhisperGuard().process(segs)
+    assert result.passed is True and result.rejected_by is None
+
+
+def test_silence_gate_still_rejects_sparse_hallucination_batch():
+    segs = [make_segment("Thank you.", no_speech_prob=0.87, avg_logprob=-0.17, start=0.0, end=30.0),
+            make_segment("Thank you.", no_speech_prob=0.9, avg_logprob=-0.2, start=30.0, end=60.0)]
+    assert WhisperGuard().process(segs).rejected_by == "silence"
+
+
+def test_fine_grained_window_rescued_as_a_whole():
+    # Same window split into ~1 s segments sharing nsp/lp (OkCSnbiszNs 69.9-88.9 s).
+    segs, t = [], 69.9
+    for k in range(20):
+        segs.append(make_segment(_speech(9, 30 * k), no_speech_prob=0.9, avg_logprob=-0.07, start=t, end=t + 0.95))
+        t += 0.95
+    assert len(WhisperGuard()._filter_segments(segs)) == 20
+
+
+def test_short_confident_phrase_over_silence_not_rescued():
+    segs = [make_segment(_speech(40), no_speech_prob=0.05, start=0.0, end=6.0),
+            make_segment("謝謝觀看", no_speech_prob=0.9, avg_logprob=-0.3, start=6.0, end=7.5)]
+    assert [s["text"] for s in WhisperGuard()._filter_segments(segs)] == [_speech(40)]
