@@ -41,6 +41,15 @@ class GuardConfig:
     # segments sharing both are pooled. A window shorter than this is never
     # rescued — a 1 s "謝謝觀看" over silence is dense by construction.
     no_speech_rescue_min_duration: float = 5.0
+    # Long + sparse is a hallucination whatever no_speech says. Measured silence
+    # / noise hallucinations ("Thank you." over 30 s) came with no_speech 0.14,
+    # 0.75, 0.80 and 0.87 and avg_logprob -0.04…-0.24, so neither metric can
+    # catch the low-no_speech ones; density can: every hallucinated window
+    # ≥10 s was ≤0.53 chars/s, every real-speech window ≥4.9 chars/s
+    # (faster-whisper large-v3, 2026-10-19 probe). Same window grouping and
+    # char counting as the rescue rule.
+    sparse_min_duration: float = 10.0
+    sparse_density: float = 1.0
 
 
 @dataclass
@@ -249,14 +258,13 @@ class WhisperGuard:
         # Letters/digits/CJK per second; spaces and punctuation don't count.
         return len(re.sub(r"[\W_]", "", text)) / duration
 
-    def _rescue_flags(self, segments: List[Dict]) -> List[bool]:
-        """Per segment: is it speech despite a high no_speech_prob?
+    def _windows(self, segments: List[Dict]):
+        """Yield (i, j, span) per decoding window segments[i:j].
 
         Consecutive segments with identical (no_speech_prob, avg_logprob) are one
-        decoding window; the window is rescued when it is long enough, dense
-        and confident. Any segment without usable timing is never rescued.
+        faster-whisper decoding window. span is None when any segment in it lacks
+        usable timing.
         """
-        flags = [False] * len(segments)
         i = 0
         while i < len(segments):
             key = (segments[i].get("no_speech_prob"), segments[i].get("avg_logprob"))
@@ -265,25 +273,57 @@ class WhisperGuard:
                                          segments[j].get("avg_logprob")) == key:
                 j += 1
             window = segments[i:j]
+            span = None
             if all(self._duration(s) is not None for s in window):
                 span = float(window[-1]["end"]) - float(window[0]["start"])
-                text = "".join(s.get("text", "") for s in window)
-                ok = (
-                    span >= self.config.no_speech_rescue_min_duration
-                    and self._density(text, span) >= self.config.no_speech_rescue_density
-                    and (key[1] if key[1] is not None else 0) > self.config.no_speech_rescue_logprob
-                )
-                if ok:
-                    flags[i:j] = [True] * (j - i)
+            yield i, j, span
             i = j
+
+    @staticmethod
+    def _window_text(segments: List[Dict]) -> str:
+        return "".join(s.get("text", "") for s in segments)
+
+    def _rescue_flags(self, segments: List[Dict]) -> List[bool]:
+        """Per segment: is it speech despite a high no_speech_prob?
+
+        The decoding window is rescued when it is long enough, dense and
+        confident. Any segment without usable timing is never rescued.
+        """
+        flags = [False] * len(segments)
+        for i, j, span in self._windows(segments):
+            if span is None:
+                continue
+            logprob = segments[i].get("avg_logprob")
+            ok = (
+                span >= self.config.no_speech_rescue_min_duration
+                and self._density(self._window_text(segments[i:j]), span) >= self.config.no_speech_rescue_density
+                and (logprob if logprob is not None else 0) > self.config.no_speech_rescue_logprob
+            )
+            if ok:
+                flags[i:j] = [True] * (j - i)
+        return flags
+
+    def _sparse_flags(self, segments: List[Dict]) -> List[bool]:
+        """Per segment: is its decoding window long and nearly empty?
+
+        A short phrase stretched over a long window is what Whisper emits over
+        silence or noise. Windows without usable timing are never flagged.
+        """
+        flags = [False] * len(segments)
+        for i, j, span in self._windows(segments):
+            if span is None or span < self.config.sparse_min_duration:
+                continue
+            if self._density(self._window_text(segments[i:j]), span) < self.config.sparse_density:
+                flags[i:j] = [True] * (j - i)
         return flags
 
     def _filter_segments(self, segments: List[Dict]) -> List[Dict]:
         good = []
         rescued = self._rescue_flags(segments)
-        for segment, is_rescued in zip(segments, rescued):
+        sparse = self._sparse_flags(segments)
+        for segment, is_rescued, is_sparse in zip(segments, rescued, sparse):
             text = segment.get("text", "").strip()
-            if not text:
+            if not text or is_sparse:
                 continue
             if segment.get("no_speech_prob", 0) > self.config.no_speech_prob and not is_rescued:
                 continue
