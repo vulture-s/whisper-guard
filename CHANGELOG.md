@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.3 — unreleased
+## 0.3.3 — 2026-10-21
 
 ### Fixed
 - **Silence hallucinations with a low `no_speech_prob` got through L2.**
