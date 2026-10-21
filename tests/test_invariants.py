@@ -138,8 +138,14 @@ def test_silence_gate_never_stricter_than_plain_mean():
 def test_mostly_speech_by_duration_is_never_rejected_as_silence():
     """30 s of clear speech must survive any number of short silent tails."""
     guard = WhisperGuard()
+    # ~4 chars/s, a realistic 30 s of speech (the lowest real window measured was
+    # 4.9). The original 15-char fixture (0.5 chars/s) is what a silence
+    # hallucination looks like and is dropped by the long+sparse rule (#6),
+    # which is not what this invariant is about.
+    speech = ("clear speech here, then the speaker keeps going about the weather, the train "
+              "schedule, a recipe for dinner and why the meeting moved to Thursday afternoon")
     for tails in range(0, 60, 7):
-        segs = [_seg("clear speech here", 0.0, 30.0, nsp=0.05)]
+        segs = [_seg(speech, 0.0, 30.0, nsp=0.05)]
         segs += [_seg("", 30.0 + i, 30.5 + i, nsp=0.99) for i in range(tails)]
         result = guard.process(segs)
         assert result.rejected_by != "silence", tails
