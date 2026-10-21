@@ -228,7 +228,12 @@ def test_silence_check_is_duration_weighted():
     # 30 s of clear speech + three 1 s BGM tails. Count-average no_speech is
     # (0.05 + 3*0.95)/4 = 0.725 > 0.6 and used to wipe the whole transcript;
     # duration-weighted it is (30*0.05 + 3*0.95)/33 = 0.13.
-    segs = [make_segment("這是一段很長的正常講話內容", no_speech_prob=0.05, start=0.0, end=30.0)]
+    # 30 s of speech carries ~150 chars (5 chars/s, the lowest real-speech
+    # density measured was 4.9); the original 13-char fixture (0.43 chars/s) is
+    # exactly what a silence hallucination looks like and is now dropped by the
+    # long+sparse rule, which is not what this test is about.
+    speech = "這是一段很長的正常講話內容" + "".join(chr(0x4E00 + i) for i in range(137))
+    segs = [make_segment(speech, no_speech_prob=0.05, start=0.0, end=30.0)]
     for i in range(3):
         segs.append(make_segment("bgm", no_speech_prob=0.95, start=30.0 + i, end=31.0 + i))
     result = WhisperGuard().process(segs)
@@ -394,3 +399,40 @@ def test_short_confident_phrase_over_silence_not_rescued():
     segs = [make_segment(_speech(40), no_speech_prob=0.05, start=0.0, end=6.0),
             make_segment("謝謝觀看", no_speech_prob=0.9, avg_logprob=-0.3, start=6.0, end=7.5)]
     assert [s["text"] for s in WhisperGuard()._filter_segments(segs)] == [_speech(40)]
+
+
+
+# --- L2: long + sparse windows are hallucinations whatever no_speech says ---
+# Real faster-whisper large-v3 metrics (2026-10-19 probe, silence/noise tails).
+
+
+def test_sparse_hallucinations_with_low_no_speech_dropped():
+    segs = [make_segment(_speech(40), no_speech_prob=0.05, start=0.0, end=6.0),
+            make_segment("Thank you.", no_speech_prob=0.14, avg_logprob=-0.04, start=6.0, end=36.0),
+            make_segment("Thank you.", no_speech_prob=0.75, avg_logprob=-0.22, start=36.0, end=66.0)]
+    assert [s["text"] for s in WhisperGuard()._filter_segments(segs)] == [_speech(40)]
+
+
+def test_slow_but_real_speech_window_kept():
+    # 30 s window at 2 chars/s (slow, pause-heavy delivery) is above the bar.
+    seg = make_segment(_speech(60), no_speech_prob=0.3, avg_logprob=-0.3, start=0.0, end=30.0)
+    assert len(WhisperGuard()._filter_segments([seg])) == 1
+
+
+def test_sparse_rule_judges_the_window_not_the_segment():
+    # One window, fine-grained: 9 short pieces of real speech + a long pause
+    # segment carrying one char. Pooled density is ~3 chars/s ⇒ kept.
+    segs = [make_segment(_speech(9, 30 * k), no_speech_prob=0.2, avg_logprob=-0.2,
+                         start=k * 1.0, end=k * 1.0 + 0.95) for k in range(9)]
+    segs.append(make_segment("嗯", no_speech_prob=0.2, avg_logprob=-0.2, start=9.0, end=29.0))
+    assert len(WhisperGuard()._filter_segments(segs)) == 10
+
+
+def test_short_sparse_segment_not_hit():
+    seg = make_segment("好", no_speech_prob=0.1, avg_logprob=-0.3, start=0.0, end=2.0)
+    assert len(WhisperGuard()._filter_segments([seg])) == 1
+
+
+def test_sparse_rule_needs_timing():
+    seg = make_segment("Thank you.", no_speech_prob=0.14, avg_logprob=-0.04)
+    assert len(WhisperGuard()._filter_segments([seg])) == 1

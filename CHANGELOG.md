@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.3 — unreleased
+
+### Fixed
+- **Silence hallucinations with a low `no_speech_prob` got through L2.**
+  Over a noise bed faster-whisper filled 30 s windows with "Thank you." at
+  `no_speech_prob` 0.14 and 0.75 (`avg_logprob` −0.04 / −0.22), below the
+  0.8 cut and above every logprob cut, so they reached the transcript. A
+  decoding window (same grouping as the 0.3.2 rescue rule) spanning ≥
+  `sparse_min_duration` (10 s) with < `sparse_density` (1.0) letters/digits/CJK
+  per second is now dropped whatever its metrics. Measured gap: hallucinated
+  windows ≥10 s were ≤0.53 chars/s, real-speech windows ≥4.9 chars/s.
+  "由 Amara.org 社群提供的字幕" (`no_speech_prob` 0.8019) no longer depends on
+  that hair's-breadth margin. Without usable timing the rule does not apply.
+
 ## 0.3.2 — 2026-10-20
 
 Behaviour fixes from the 2026-10-09 audit and 2026-10-19 probe. All change transcript output.
