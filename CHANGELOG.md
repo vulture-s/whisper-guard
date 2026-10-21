@@ -1,8 +1,22 @@
 # Changelog
 
-## 0.3.2 — unreleased
+## 0.3.3 — unreleased
 
-Behaviour fixes from the 2026-10-09 audit. Both change transcript output.
+### Fixed
+- **Silence hallucinations with a low `no_speech_prob` got through L2.**
+  Over a noise bed faster-whisper filled 30 s windows with "Thank you." at
+  `no_speech_prob` 0.14 and 0.75 (`avg_logprob` −0.04 / −0.22), below the
+  0.8 cut and above every logprob cut, so they reached the transcript. A
+  decoding window (same grouping as the 0.3.2 rescue rule) spanning ≥
+  `sparse_min_duration` (10 s) with < `sparse_density` (1.0) letters/digits/CJK
+  per second is now dropped whatever its metrics. Measured gap: hallucinated
+  windows ≥10 s were ≤0.53 chars/s, real-speech windows ≥4.9 chars/s.
+  "由 Amara.org 社群提供的字幕" (`no_speech_prob` 0.8019) no longer depends on
+  that hair's-breadth margin. Without usable timing the rule does not apply.
+
+## 0.3.2 — 2026-10-20
+
+Behaviour fixes from the 2026-10-09 audit and 2026-10-19 probe. All change transcript output.
 
 ### Fixed
 - **L4 char-loop filter rewrote numbers.** `(.{2,4})\1{2,}` ran over all
@@ -22,6 +36,20 @@ Behaviour fixes from the 2026-10-09 audit. Both change transcript output.
   Duration alone would have wiped 40 s of interview followed by 80 s of
   ambience; the min never rejects a batch the old gate passed. Without timing
   (or with non-numeric / non-finite `start`/`end`) it is the plain mean.
+- **L1/L2 trusted `no_speech_prob` alone and dropped real speech.** Over music
+  or a noise bed faster-whisper can report `no_speech_prob` 0.9–1.0 for a
+  window of confidently decoded speech (`avg_logprob` −0.02…−0.07, 7–9
+  chars/s); L2 dropped it silently (one 177 s explainer lost 20 of 173
+  segments) and a short reel made only of such windows was wiped by L1. A
+  high-`no_speech` decoding window — consecutive segments sharing the same
+  `no_speech_prob`/`avg_logprob` — is now kept when it spans ≥
+  `no_speech_rescue_min_duration` (5 s), has ≥ `no_speech_rescue_density`
+  (2.0) letters/digits/CJK per second and `avg_logprob` >
+  `no_speech_rescue_logprob` (−0.5); L1 counts such windows as speech.
+  Whisper's own "no_speech high AND logprob < −1" was not used: measured
+  silence hallucinations ("Thank you.", "由 Amara.org 社群提供的字幕") sit at
+  −0.04…−0.24 and would all pass. They are 0.3–0.6 chars/s, so density keeps
+  them out. Without usable timing the old rule applies unchanged.
 
 ## 0.3.1 — 2026-08-08
 

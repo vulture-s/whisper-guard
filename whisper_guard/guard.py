@@ -25,6 +25,31 @@ class GuardConfig:
     # the repeated run is at least this long: amounts, phone numbers, IPs and
     # versions stay intact, while a decoder spewing "0000…" still collapses.
     char_loop_numeric_min_span: int = 20
+    # L2 no_speech is not trusted alone once timing is known. Over music or a
+    # bed of noise faster-whisper can report no_speech_prob ~1.0 on a 30 s
+    # window of real, confidently decoded speech (lp -0.02, 7 chars/s) and the
+    # filter silently dropped it. What separates the two is density: silence
+    # hallucinations are one short phrase stretched over a long window
+    # ("Thank you." over 30 s = 0.3 chars/s), real speech is 2–15 chars/s.
+    # So a high-no_speech segment is kept only when it is dense AND confident.
+    # avg_logprob is no help on its own: measured hallucinations sat at -0.04
+    # to -0.24, so Whisper's own "no_speech high AND logprob < -1" keeps them.
+    no_speech_rescue_density: float = 2.0
+    no_speech_rescue_logprob: float = -0.5
+    # Judged per decoding window, not per segment: faster-whisper gives every
+    # segment of one 30 s window the same no_speech/avg_logprob, so consecutive
+    # segments sharing both are pooled. A window shorter than this is never
+    # rescued — a 1 s "謝謝觀看" over silence is dense by construction.
+    no_speech_rescue_min_duration: float = 5.0
+    # Long + sparse is a hallucination whatever no_speech says. Measured silence
+    # / noise hallucinations ("Thank you." over 30 s) came with no_speech 0.14,
+    # 0.75, 0.80 and 0.87 and avg_logprob -0.04…-0.24, so neither metric can
+    # catch the low-no_speech ones; density can: every hallucinated window
+    # ≥10 s was ≤0.53 chars/s, every real-speech window ≥4.9 chars/s
+    # (faster-whisper large-v3, 2026-10-19 probe). Same window grouping and
+    # char counting as the rescue rule.
+    sparse_min_duration: float = 10.0
+    sparse_density: float = 1.0
 
 
 @dataclass
@@ -60,7 +85,12 @@ class WhisperGuard:
                 filtered_count=0,
             )
 
-        if self._mean_no_speech(segments) > self.config.silence_threshold:
+        # Dense, confident segments are speech whatever no_speech says (see
+        # GuardConfig.no_speech_rescue_*): a 60 s reel over BGM that faster-whisper
+        # decodes as two 30 s windows at no_speech ~1.0 was wiped here, before L2.
+        rescued = self._rescue_flags(segments)
+        l1_view = [dict(s, no_speech_prob=0.0) if r else s for s, r in zip(segments, rescued)]
+        if self._mean_no_speech(l1_view) > self.config.silence_threshold:
             return GuardResult(
                 text="",
                 passed=False,
@@ -214,17 +244,90 @@ class WhisperGuard:
             return True
         return len(match.group(0)) < self.config.char_loop_numeric_min_span
 
+    @staticmethod
+    def _duration(segment: Dict) -> Optional[float]:
+        start, end = segment.get("start"), segment.get("end")
+        for value in (start, end):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                return None
+        duration = float(end) - float(start)
+        return duration if duration > 0 else None
+
+    @staticmethod
+    def _density(text: str, duration: float) -> float:
+        # Letters/digits/CJK per second; spaces and punctuation don't count.
+        return len(re.sub(r"[\W_]", "", text)) / duration
+
+    def _windows(self, segments: List[Dict]):
+        """Yield (i, j, span) per decoding window segments[i:j].
+
+        Consecutive segments with identical (no_speech_prob, avg_logprob) are one
+        faster-whisper decoding window. span is None when any segment in it lacks
+        usable timing.
+        """
+        i = 0
+        while i < len(segments):
+            key = (segments[i].get("no_speech_prob"), segments[i].get("avg_logprob"))
+            j = i + 1
+            while j < len(segments) and (segments[j].get("no_speech_prob"),
+                                         segments[j].get("avg_logprob")) == key:
+                j += 1
+            window = segments[i:j]
+            span = None
+            if all(self._duration(s) is not None for s in window):
+                span = float(window[-1]["end"]) - float(window[0]["start"])
+            yield i, j, span
+            i = j
+
+    @staticmethod
+    def _window_text(segments: List[Dict]) -> str:
+        return "".join(s.get("text", "") for s in segments)
+
+    def _rescue_flags(self, segments: List[Dict]) -> List[bool]:
+        """Per segment: is it speech despite a high no_speech_prob?
+
+        The decoding window is rescued when it is long enough, dense and
+        confident. Any segment without usable timing is never rescued.
+        """
+        flags = [False] * len(segments)
+        for i, j, span in self._windows(segments):
+            if span is None:
+                continue
+            logprob = segments[i].get("avg_logprob")
+            ok = (
+                span >= self.config.no_speech_rescue_min_duration
+                and self._density(self._window_text(segments[i:j]), span) >= self.config.no_speech_rescue_density
+                and (logprob if logprob is not None else 0) > self.config.no_speech_rescue_logprob
+            )
+            if ok:
+                flags[i:j] = [True] * (j - i)
+        return flags
+
+    def _sparse_flags(self, segments: List[Dict]) -> List[bool]:
+        """Per segment: is its decoding window long and nearly empty?
+
+        A short phrase stretched over a long window is what Whisper emits over
+        silence or noise. Windows without usable timing are never flagged.
+        """
+        flags = [False] * len(segments)
+        for i, j, span in self._windows(segments):
+            if span is None or span < self.config.sparse_min_duration:
+                continue
+            if self._density(self._window_text(segments[i:j]), span) < self.config.sparse_density:
+                flags[i:j] = [True] * (j - i)
+        return flags
+
     def _filter_segments(self, segments: List[Dict]) -> List[Dict]:
         good = []
-        for segment in segments:
+        rescued = self._rescue_flags(segments)
+        sparse = self._sparse_flags(segments)
+        for segment, is_rescued, is_sparse in zip(segments, rescued, sparse):
             text = segment.get("text", "").strip()
-            if not text:
+            if not text or is_sparse:
                 continue
-            if segment.get("no_speech_prob", 0) > self.config.no_speech_prob:
+            if segment.get("no_speech_prob", 0) > self.config.no_speech_prob and not is_rescued:
                 continue
-            duration = None
-            if "start" in segment and "end" in segment:
-                duration = segment["end"] - segment["start"]
+            duration = self._duration(segment)
             if duration is not None and duration < self.config.short_segment_threshold:
                 logprob_thresh = self.config.avg_logprob_short
             else:
